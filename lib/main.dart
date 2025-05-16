@@ -1,323 +1,435 @@
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
-import 'package:camera/camera.dart';
 import 'package:tflite_flutter/tflite_flutter.dart';
 import 'package:image/image.dart' as img;
 import 'package:image_picker/image_picker.dart';
+import 'dart:math' as math;
 
-List<CameraDescription> cameras = [];
-
-void main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-  cameras = await availableCameras();
-  runApp(SawitDetectorApp());
+void main() {
+  runApp(const MyApp());
 }
 
-class SawitDetectorApp extends StatelessWidget {
+class MyApp extends StatefulWidget {
+  const MyApp({super.key});
+
+  @override
+  State<MyApp> createState() => _MyAppState();
+}
+
+class _MyAppState extends State<MyApp> {
+  bool isDarkMode = false;
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      title: 'Mock iPalms',
       debugShowCheckedModeBanner: false,
-      home: HomeScreen(),
+      theme: isDarkMode ? ThemeData.dark() : ThemeData.light(),
+      home: GalleryDetectionPage(
+        isDarkMode: isDarkMode,
+        onToggleTheme: () {
+          setState(() {
+            isDarkMode = !isDarkMode;
+          });
+        },
+      ),
     );
   }
 }
 
-class HomeScreen extends StatefulWidget {
+class GalleryDetectionPage extends StatefulWidget {
+  final bool isDarkMode;
+  final VoidCallback onToggleTheme;
+
+  const GalleryDetectionPage({
+    super.key,
+    required this.isDarkMode,
+    required this.onToggleTheme,
+  });
+
   @override
-  _HomeScreenState createState() => _HomeScreenState();
+  State<GalleryDetectionPage> createState() => _GalleryDetectionPageState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
-  late CameraController _controller;
-  late Interpreter _interpreter;
-  bool _isProcessing = false;
-  String _result = "";
-  Duration? _inferenceTime;
+class _GalleryDetectionPageState extends State<GalleryDetectionPage> {
+  Interpreter? _interpreter;
+  List<int>? _inputShape;
+  List<int>? _outputShape;
+  File? _imageFile;
+  img.Image? _imageRaw;
+  List<Map<String, dynamic>> _detections = [];
+  bool _loading = false;
+  String? _error;
+  double? _elapsed;
 
   @override
   void initState() {
     super.initState();
-    _initialize();
+    _loadModel();
   }
 
-  Future<void> _initialize() async {
-    await _initCamera();
-    await _loadModel(); 
-    _startCameraStream();
-  }
-
-
-  Future<void> _loadModel() async{
-    _interpreter = await Interpreter.fromAsset('assets/sawit.tflite');
-    print("Input Tensor Shape: ${_interpreter.getInputTensor(0).shape}");
-    print("Output Tensor Shape: ${_interpreter.getOutputTensor(0).shape}");
-    _interpreter.allocateTensors();
-  }
-
-  Future<void> _initCamera() async{
-    _controller = CameraController(cameras[0], ResolutionPreset.high);
-    await _controller.initialize();
-    if (!mounted) return;
-    setState(() {});
-  }
-
-  /*Float32List imageToByteListFloat32(img.Image image, int inputSize) {
-    var convertedBytes = Float32List(1 * inputSize * inputSize * 3);
-    var buffer = Float32List.view(convertedBytes.buffer);
-    int pixelIndex = 0;
-
-    for (int y = 0; y < inputSize; y++) {
-      for (int x = 0; x < inputSize; x++) {
-        var pixel = image.getPixel(x, y);
-        buffer[pixelIndex++] = pixel.r / 255.0;
-        buffer[pixelIndex++] = pixel.g / 255.0;
-        buffer[pixelIndex++] = pixel.b / 255.0;
-      }
-    }
-
-    return convertedBytes;
-  }*/
-  
-  Float32List imageToByteListFloat32(img.Image image, int size) {
-  var buffer = Float32List(1 * size * size * 3);
-  int index = 0;
-
-  for (int y = 0; y < size; y++) {
-    for (int x = 0; x < size; x++) {
-      var pixel = image.getPixel(x, y);
-
-      // Normalize pixel value to 0 - 1
-      buffer[index++] = ((pixel >> 16) & 0xFF) / 255.0; // R
-      buffer[index++] = ((pixel >> 8) & 0xFF) / 255.0;  // G
-      buffer[index++] = (pixel & 0xFF) / 255.0;         // B
-    }
-  }
-
-  return buffer;
-}
-  
-  void _runModel(File imageFile) async {
-    setState(() {
-      _isProcessing = true;
-      _result = "";
-      _inferenceTime = null;
-    });
-
-    final startTime = DateTime.now();
-
-    final rawBytes = await imageFile.readAsBytes();
-    img.Image? oriImage = img.decodeImage(rawBytes);
-    img.Image resizedImage = img.copyResize(oriImage!, width: 800, height: 800);
-
-    Float32List input = imageToByteListFloat32(resizedImage, 800);
-    var output = List.filled(1 * 300 * 38, 0.0).reshape([1, 300, 38]);
-    print("Input Tensor Length: ${input.length}"); // Harusnya 1 * 800 * 800 * 3 = 1920000
-    print("Input Tensor First 10 Values: ${input.sublist(0, 10)}");
-        
+  Future<void> _loadModel() async {
     try {
-      _interpreter.run(input, output);
-    } catch (e) {
-      print("Error saat menjalankan model: $e");
-    }
-    
-    final endTime = DateTime.now();
-
-    setState(() {
-      _isProcessing = false;
-      _inferenceTime = endTime.difference(startTime);
-      _result = "Deteksi: ${output[0][0].toString()} buah sawit";
-    });
-    if (_interpreter == null || !_interpreter.isAllocated) {
-  print("Interpreter belum diinisialisasi atau tensor belum dialokasikan.");
-  return;
-    }
-  }
-
-Future<void> _pickImageFromGallery() async {
-    final picker = ImagePicker();
-    final XFile? image = await picker.pickImage(source: ImageSource.gallery);
-
-    if (image != null) {
-      _runModel(File(image.path));
-    }
-  }
-  
-  
-  void _startCameraStream() {
-  if (!_controller.value.isInitialized) return;
-
-  _controller.startImageStream((CameraImage cameraImage) async {
-    if (_isProcessing) return;
-    _isProcessing = true;
-
-    try {
-      // Konversi frame kamera menjadi img.Image
-      img.Image imgFrame = _convertYUV420ToImage(cameraImage);
-
-      // Resize sesuai input tensor
-      img.Image resizedImage = img.copyResize(imgFrame, width: 800, height: 800);
-
-      // Konversi menjadi Float32List
-      Float32List input = imageToByteListFloat32(resizedImage, 800);
-
-      // Siapkan output tensor
-      var output = List.filled(1 * 200 * 200 * 32, 0.0).reshape([1, 200, 200, 32]);
-
-      final startTime = DateTime.now();
-
-      // Inference
-      _interpreter.run(input, output);
-
-      //_runModel(input);
-      final endTime = DateTime.now();
-      final inferenceTime = endTime.difference(startTime);
-
+      final interpreter = await Interpreter.fromAsset('assets/sawit.tflite');
+      interpreter.allocateTensors();
       setState(() {
-        _inferenceTime = inferenceTime;
-        _result = "Deteksi: ${output[0][0][0].toString()}";
+        _interpreter = interpreter;
+        _inputShape = interpreter.getInputTensor(0).shape;
+        _outputShape = interpreter.getOutputTensor(0).shape;
+        _error = null;
       });
-
     } catch (e) {
-      print("Error selama inference: $e");
-    }
-
-    _isProcessing = false;
-  
-  });
-}
-/*
-img.Image _convertCameraImage(CameraImage cameraImage) {
-  final int width = cameraImage.width;
-  final int height = cameraImage.height;
-  final img.Image imgImage = img.Image(width, height);
-
-  // Asumsikan format gambar adalah YUV420 (NV21)
-  final Plane plane = cameraImage.planes[0];
-  final int pixelIndex = 0;
-
-  for (int y = 0; y < height; y++) {
-    for (int x = 0; x < width; x++) {
-      int pixelValue = plane.bytes[y * width + x];
-
-      // Konversi ke RGB (grayscale dalam kasus ini)
-      imgImage.setPixel(x, y, img.getColor(pixelValue, pixelValue, pixelValue));
+      setState(() {
+        _error = 'Gagal load model: $e';
+      });
     }
   }
 
-  return imgImage;
-}*/
-
-img.Image _convertYUV420ToImage(CameraImage cameraImage) {
-  final int width = cameraImage.width;
-  final int height = cameraImage.height;
-
-  final img.Image image = img.Image(width, height);
-
-  Plane planeY = cameraImage.planes[0];
-  Plane planeU = cameraImage.planes[1];
-  Plane planeV = cameraImage.planes[2];
-
-  for (int y = 0; y < height; y++) {
-    for (int x = 0; x < width; x++) {
-      int pixelIndex = y * width + x;
-
-      int yValue = planeY.bytes[pixelIndex];
-      int uValue = planeU.bytes[pixelIndex ~/ 4];
-      int vValue = planeV.bytes[pixelIndex ~/ 4];
-
-      double Y = yValue.toDouble();
-      double U = uValue.toDouble() - 128.0;
-      double V = vValue.toDouble() - 128.0;
-
-      // Konversi YUV ke RGB
-      int r = (Y + 1.402 * V).clamp(0, 255).toInt();
-      int g = (Y - 0.344136 * U - 0.714136 * V).clamp(0, 255).toInt();
-      int b = (Y + 1.772 * U).clamp(0, 255).toInt();
-
-      image.setPixel(x, y, img.getColor(r, g, b));
-    }
-  }
-
-  return image;
-}
-
-void _processCameraImage(CameraImage image, List<List<List<double>>> input) {
-    final int width = image.width;
-    final int height = image.height;
-    final int uvRowStride = image.planes[1].bytesPerRow;
-    final int uvPixelStride = image.planes[1].bytesPerPixel!;
-    
-    final bytes = image.planes[0].bytes;
-    final uvBytes1 = image.planes[1].bytes;
-    final uvBytes2 = image.planes[2].bytes;
-
-    // Calculate scaling factors
-    final double scaleX = width / 320;
-    final double scaleY = height / 320;
-
-    for (int y = 0; y < 800; y++) {
-      for (int x = 0; x < 800; x++) {
-        final int srcX = (x * scaleX).floor();
-        final int srcY = (y * scaleY).floor();
-        
-        final int uvIndex = 
-          uvPixelStride * (srcX >> 1) + 
-          uvRowStride * (srcY >> 1);
-        
-        final int index = srcY * width + srcX;
-
-        final yp = bytes[index];
-        final up = uvBytes1[uvIndex];
-        final vp = uvBytes2[uvIndex];
-
-        // Optimized YUV to RGB conversion
-        int r = yp + ((1436 * (vp - 128)) >> 10);
-        int g = yp - ((46549 * (up - 128)) >> 17) - ((93604 * (vp - 128)) >> 17);
-        int b = yp + ((1814 * (up - 128)) >> 10);
-
-        // Clamp and normalize
-        input[y][x][0] = (r < 0 ? 0 : (r > 255 ? 255 : r)) / 255.0;
-        input[y][x][1] = (g < 0 ? 0 : (g > 255 ? 255 : g)) / 255.0;
-        input[y][x][2] = (b < 0 ? 0 : (b > 255 ? 255 : b)) / 255.0;
+  Future<void> _pickAndDetect() async {
+    setState(() {
+      _loading = true;
+      _detections = [];
+      _error = null;
+    });
+    try {
+      final picked = await ImagePicker().pickImage(source: ImageSource.gallery);
+      if (picked == null) {
+        setState(() => _loading = false);
+        return;
       }
-    }}
+      final file = File(picked.path);
+      setState(() => _imageFile = file);
+      await _runDetection(file);
+    } catch (e) {
+      setState(() {
+        _loading = false;
+        _error = 'Gagal ambil gambar: $e';
+      });
+    }
+  }
+
+  Future<void> _captureAndDetect() async {
+    setState(() {
+      _loading = true;
+      _detections = [];
+      _error = null;
+    });
+    try {
+      final picked = await ImagePicker().pickImage(source: ImageSource.camera);
+      if (picked == null) {
+        setState(() => _loading = false);
+        return;
+      }
+      final file = File(picked.path);
+      setState(() => _imageFile = file);
+      await _runDetection(file);
+    } catch (e) {
+      setState(() {
+        _loading = false;
+        _error = 'Gagal ambil gambar: $e';
+      });
+    }
+  }
+
+  Future<void> _runDetection(File file) async {
+    if (_interpreter == null || _inputShape == null || _outputShape == null) {
+      setState(() {
+        _loading = false;
+        _error = 'Model belum siap';
+      });
+      return;
+    }
+    try {
+      final start = DateTime.now();
+      final bytes = await file.readAsBytes();
+      final decoded = img.decodeImage(bytes);
+      if (decoded == null) throw Exception('Gagal decode gambar');
+
+      final inputH = _inputShape![1];
+      final inputW = _inputShape![2];
+      final resized = img.copyResize(
+        decoded,
+        width: inputW,
+        height: inputH,
+        interpolation: img.Interpolation.linear,
+      );
+      setState(() => _imageRaw = resized);
+
+      final input = [
+        List.generate(
+          inputH,
+          (y) => List.generate(inputW, (x) {
+            final pixel = resized.getPixel(x, y);
+            return [
+              img.getRed(pixel) / 255.0,
+              img.getGreen(pixel) / 255.0,
+              img.getBlue(pixel) / 255.0,
+            ];
+          }),
+        ),
+      ];
+
+      final output = List.generate(
+        1,
+        (_) => List.generate(300, (_) => List<double>.filled(38, 0.0)),
+      );
+
+      final maskOutput = List.generate(
+        1,
+        (_) => List.generate(
+          200,
+          (_) => List.generate(200, (_) => List<double>.filled(32, 0.0)),
+        ),
+      );
+
+      final outputs = {0: output, 1: maskOutput};
+      _interpreter!.runForMultipleInputs([input], outputs);
+
+      final dets = _parseDetections(output[0]);
+      final end = DateTime.now();
+      setState(() {
+        _detections = dets;
+        _loading = false;
+        _elapsed = end.difference(start).inMilliseconds / 1000.0;
+        _error = null;
+      });
+    } catch (e) {
+      setState(() {
+        _loading = false;
+        _error = 'Error deteksi: $e';
+        _elapsed = null;
+      });
+    }
+  }
+
+  List<Map<String, dynamic>> _parseDetections(List<List<double>> output) {
+    final results = <Map<String, dynamic>>[];
+    for (final det in output) {
+      if (det.length >= 5 && det[4] > 0.5) {
+        final bbox = [
+          det[0].clamp(0.0, 1.0),
+          det[1].clamp(0.0, 1.0),
+          det[2].clamp(0.0, 1.0),
+          det[3].clamp(0.0, 1.0),
+        ];
+        results.add({'bbox': bbox, 'confidence': det[4]});
+      }
+    }
+    return nonMaxSuppression(results, 0.5);
+  }
+
+  List<Map<String, dynamic>> nonMaxSuppression(
+    List<Map<String, dynamic>> dets,
+    double iouThresh,
+  ) {
+    dets.sort(
+      (a, b) =>
+          (b['confidence'] as double).compareTo(a['confidence'] as double),
+    );
+    final kept = <Map<String, dynamic>>[];
+    while (dets.isNotEmpty) {
+      final best = dets.removeAt(0);
+      kept.add(best);
+      dets.removeWhere((det) {
+        final iou = computeIoU(best['bbox'], det['bbox']);
+        return iou > iouThresh;
+      });
+    }
+    return kept;
+  }
+
+  double computeIoU(List bbox1, List bbox2) {
+    final x1 = math.max(bbox1[0], bbox2[0]);
+    final y1 = math.max(bbox1[1], bbox2[1]);
+    final x2 = math.min(bbox1[2], bbox2[2]);
+    final y2 = math.min(bbox1[3], bbox2[3]);
+    final interArea = math.max(0, x2 - x1) * math.max(0, y2 - y1);
+    final area1 = (bbox1[2] - bbox1[0]) * (bbox1[3] - bbox1[1]);
+    final area2 = (bbox2[2] - bbox2[0]) * (bbox2[3] - bbox2[1]);
+    return interArea / (area1 + area2 - interArea);
+  }
 
   @override
   void dispose() {
-    _controller.dispose();
-    _interpreter.close();
+    _interpreter?.close();
     super.dispose();
+  }
+
+  Widget _buildInfoBox(String label, String value) {
+    return Container(
+      width: 260,
+      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
+      margin: const EdgeInsets.symmetric(vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.6),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Text(
+        '$label: $value',
+        textAlign: TextAlign.center,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 18,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
+    final imageWidget =
+        _imageFile == null
+            ? const Center(child: Text('Pilih Gambar'))
+            : LayoutBuilder(
+              builder: (context, constraints) {
+                final displayWidth = constraints.maxWidth;
+                final displayHeight = constraints.maxHeight;
+                return Stack(
+                  children: [
+                    if (_imageRaw != null)
+                      Center(
+                        child: Image.memory(
+                          Uint8List.fromList(img.encodeJpg(_imageRaw!)),
+                          width: displayWidth,
+                          height: displayHeight,
+                          fit: BoxFit.contain,
+                        ),
+                      ),
+                    if (_detections.isNotEmpty)
+                      CustomPaint(
+                        painter: _DetectionPainter(
+                          detections: _detections,
+                          imageSize: const Size(800, 800),
+                          widgetSize: Size(displayWidth, displayHeight),
+                        ),
+                        size: Size(displayWidth, displayHeight),
+                      ),
+                  ],
+                );
+              },
+            );
+
     return Scaffold(
-      appBar: AppBar(title: Text("Sawit Detector")),
+      appBar: AppBar(
+        centerTitle: true,
+        title: const Text('Mock iPalms'),
+        actions: [
+          IconButton(
+            icon: Icon(widget.isDarkMode ? Icons.light_mode : Icons.dark_mode),
+            onPressed: widget.onToggleTheme,
+          ),
+        ],
+      ),
       body: Column(
         children: [
-          if (_controller.value.isInitialized)
-            Container(
-              height: 400,
-              width: 800,
-              margin: const EdgeInsets.all(50.0),
-              child: CameraPreview(_controller),
-            )
-          else
-            Center(child: CircularProgressIndicator()),
-          SizedBox(height: 16),
-          ElevatedButton(
-            onPressed: _pickImageFromGallery,
-            child: Text("Ambil dari galeri"),
+          Expanded(
+            child:
+                _loading
+                    ? const Center(child: CircularProgressIndicator())
+                    : imageWidget,
           ),
-          SizedBox(height: 16),
-          if (_isProcessing) CircularProgressIndicator(),
-          if (_result.isNotEmpty) Text(_result, style: TextStyle(fontSize: 18)),
-          if (_inferenceTime != null)
-            Text("Waktu Deteksi: ${_inferenceTime!.inMilliseconds} ms")
+          if (_detections.isNotEmpty || _elapsed != null)
+            Column(
+              children: [
+                _buildInfoBox('Jumlah Sawit', _detections.length.toString()),
+                if (_elapsed != null)
+                  _buildInfoBox(
+                    'Waktu Deteksi',
+                    '${_elapsed!.toStringAsFixed(2)} detik',
+                  ),
+              ],
+            ),
+          if (_error != null)
+            Padding(
+              padding: const EdgeInsets.all(8),
+              child: Text(_error!, style: const TextStyle(color: Colors.red)),
+            ),
+          Padding(
+            padding: const EdgeInsets.all(16),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                ElevatedButton.icon(
+                  onPressed:
+                      _loading || _interpreter == null ? null : _pickAndDetect,
+                  icon: const Icon(Icons.image),
+                  label: const Text('Pilih Gambar'),
+                ),
+                const SizedBox(width: 16),
+                ElevatedButton.icon(
+                  onPressed:
+                      _loading || _interpreter == null
+                          ? null
+                          : _captureAndDetect,
+                  icon: const Icon(Icons.camera_alt),
+                  label: const Text('Kamera'),
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );
   }
+}
+
+class _DetectionPainter extends CustomPainter {
+  final List detections;
+  final Size imageSize;
+  final Size widgetSize;
+
+  _DetectionPainter({
+    required this.detections,
+    required this.imageSize,
+    required this.widgetSize,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint =
+        Paint()
+          ..color = Colors.yellow
+          ..strokeWidth = 2
+          ..style = PaintingStyle.stroke;
+
+    final imgW = imageSize.width;
+    final imgH = imageSize.height;
+    final widgetW = widgetSize.width;
+    final widgetH = widgetSize.height;
+    final scale = math.min(widgetW / imgW, widgetH / imgH);
+    final displayW = imgW * scale;
+    final displayH = imgH * scale;
+    final dx = (widgetW - displayW) / 2;
+    final dy = (widgetH - displayH) / 2;
+
+    for (final det in detections) {
+      final bbox = det['bbox'] as List;
+      final conf = det['confidence'] as double;
+      final x1 = bbox[0] * imgW * scale + dx;
+      final y1 = bbox[1] * imgH * scale + dy;
+      final x2 = bbox[2] * imgW * scale + dx;
+      final y2 = bbox[3] * imgH * scale + dy;
+      final rect = Rect.fromLTRB(x1, y1, x2, y2);
+      canvas.drawRect(rect, paint);
+
+      final textPainter = TextPainter(
+        text: TextSpan(
+          text: '${(conf * 100).toStringAsFixed(0)}%',
+          style: const TextStyle(
+            color: Colors.yellow,
+            fontSize: 14,
+            backgroundColor: Colors.black54,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      );
+      textPainter.layout();
+      textPainter.paint(canvas, Offset(x1, y1 - 20));
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
 }
