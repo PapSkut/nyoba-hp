@@ -2,10 +2,10 @@ from ultralytics import YOLO
 import os
 import cv2
 
-model = YOLO("runs/test daw/count.pt")
+model = YOLO("runs/test daw/count.pt")# path ke file model
 
-image_folder = "test image/1. Gambar janjang buah sawit di TPH (Minimal 40 Gambar)"
-output_folder = "output image"
+image_folder = "test image/1. Gambar janjang buah sawit di TPH (Minimal 40 Gambar)" #path ke folder gambar untuk dites prediksi
+output_folder = "output_image"
 
 existing_folders = os.listdir(output_folder)
 folder_numbers = [int(folder.split('_')[-1]) for folder in existing_folders if folder.startswith("model_")]

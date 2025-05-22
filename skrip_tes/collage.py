@@ -2,8 +2,8 @@ import os
 import cv2
 import numpy as np
 
-result_folder = "output image/model_23/result"
-output_folder = "collage_output"
+result_folder = "output image/model_23/result" # path ke folder hasil prediksi
+output_folder = "collage_output" #folder output untuk menyimpan hasil kolase
 os.makedirs(output_folder, exist_ok=True)
 
 resize_width = 800
